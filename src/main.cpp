@@ -15,6 +15,9 @@
  */
 #include "CmdLineParser.h"
 #include "OnvifDevice.h"
+#include "OnvifDeviceClient.h"
+#include "OnvifPtzClient.h"
+#include "OnvifEventClient.h"
 #include "OnvifDiscoveryClient.h"
 #include "SoapHelper.h"
 #include <QCoreApplication>
@@ -24,6 +27,8 @@
 #include <QThreadPool>
 #include <QTimer>
 
+#include <chrono>
+#include <thread>
 
 int main(int argc, char **argv) {
 
@@ -113,9 +118,9 @@ int main(int argc, char **argv) {
 	} else {
 		qCritical() << response.GetCompleteFault();
 	}
-
-	/*
-	OnvifDeviceClient onvifDevice(QUrl("http://192.168.0.25:8080/onvif/device_service"), ctx);
+/*
+	QSharedPointer<SoapCtx> ctx = QSharedPointer<SoapCtx>::create();
+	OnvifDeviceClient onvifDevice(QUrl("http://10.0.1.31:8899/onvif/device_service"), ctx);
 	onvifDevice.SetAuth("admin", "admin", AUTO);
 	auto pool = QThreadPool::globalInstance();
 
@@ -127,15 +132,134 @@ int main(int argc, char **argv) {
 
 	QString eventUrl = "";
 	if(servicesResponse) {
-	 for(auto service : servicesResponse.getResultObject()->Service) {
-	  qDebug() << "namespace:" << service->Namespace.toStdString().c_str() << "Url:" << service->XAddr.toStdString().c_str();
-	  if(service->Namespace == "http://www.onvif.org/ver10/events/wsdl") {
-	   onvifEvent = new OnvifEventClient(QUrl(service->XAddr.toStdString().c_str()), ctx);
-	   onvifEvent->SetAuth("admin", "admin", AUTO);
-	  }
-	 }
+		for(auto service : servicesResponse.GetResultObject()->Service) {
+			qDebug() << "namespace:" << service->Namespace.toStdString().c_str() << "Url:" << service->XAddr.toStdString().c_str();
+			if(service->Namespace == "http://www.onvif.org/ver10/events/wsdl") {
+				onvifEvent = new OnvifEventClient(QUrl(service->XAddr.toStdString().c_str()), ctx);
+				onvifEvent->SetAuth("admin", "admin", AUTO);
+			}
+		}
 	}
-	*/
+*/
+
+
+	QSharedPointer<SoapCtx> ctx = QSharedPointer<SoapCtx>::create();
+	OnvifPtzClient onvifDevice(QUrl("http://10.0.1.31:8899/onvif/device_service"), ctx);
+	onvifDevice.SetAuth("admin", "", AUTO);
+
+/*
+from onvif-cli -u 'admin' -a '' --host '10.0.1.31' --port 8899 --wsdl /home/link/.local/wsdl
+ONVIF >>> cmd ptz GetConfigurations
+True: [{'Name': PTZ_000, 'PanTiltLimits': (PanTiltLimits){
+   Range = 
+      (Space2DDescription){
+         URI = "http://www.onvif.org/ver10/tptz/PanTiltSpaces/PositionGenericSpace"
+         XRange = 
+            (FloatRange){
+               Min = -1.0
+               Max = 1.0
+            }
+         YRange = 
+            (FloatRange){
+               Min = -1.0
+               Max = 1.0
+            }
+      }
+ }, '_token': 000, 'DefaultRelativeZoomTranslationSpace': http://www.onvif.org/ver10/tptz/ZoomSpaces/TranslationGenericSpace, 'UseCount': 2, 'DefaultPTZTimeout': PT1S, 'DefaultContinuousZoomVelocitySpace': http://www.onvif.org/ver10/tptz/ZoomSpaces/VelocityGenericSpace, 'DefaultPTZSpeed': (PTZSpeed){
+   PanTilt = 
+      (Vector2D){
+         _y = 1.0
+         _x = 1.0
+         _space = "http://www.onvif.org/ver10/tptz/PanTiltSpaces/GenericSpeedSpace"
+      }
+   Zoom = 
+      (Vector1D){
+         _x = 1.0
+         _space = "http://www.onvif.org/ver10/tptz/ZoomSpaces/ZoomGenericSpeedSpace"
+      }
+ }, 'DefaultContinuousPanTiltVelocitySpace': http://www.onvif.org/ver10/tptz/PanTiltSpaces/VelocityGenericSpace, 'NodeToken': 000, 'DefaultRelativePanTiltTranslationSpace': http://www.onvif.org/ver10/tptz/PanTiltSpaces/TranslationGenericSpace, 'ZoomLimits': (ZoomLimits){
+   Range = 
+      (Space1DDescription){
+         URI = "http://www.onvif.org/ver10/tptz/ZoomSpaces/PositionGenericSpace"
+         XRange = 
+            (FloatRange){
+               Min = -1.0
+               Max = 1.0
+            }
+      }
+ }}]
+
+*/
+
+
+
+	// TODO: relative moves return success but appear to do nothing, continuous and absolute moves fail
+	auto pool = QThreadPool::globalInstance();
+	while (true) {
+
+//#define CONTINUOUS
+//#define ABSOLUTE
+#define RELATIVE
+//#define ZOOM
+#ifdef CONTINUOUS
+		Request<_tptz__ContinuousMove> request;
+		request.Velocity = new tt__PTZSpeed();
+		request.Velocity->PanTilt = new tt__Vector2D();
+		//request.Velocity->Zoom = new tt__Vector1D();
+		request.Velocity->PanTilt->x = 0.001;
+		request.Velocity->PanTilt->y = 0;
+		//request.Velocity->Zoom->x = 0;
+		auto response = onvifDevice.ContinuousMove(request);
+#else // DISCRETE
+#  ifdef ABSOLUTE
+		Request<_tptz__AbsoluteMove> request;
+		request.Position = new tt__PTZVector();
+#    ifdef ZOOM
+		request.Position->Zoom = new tt__Vector1D();
+		request.Position->Zoom->x = 0.5;
+#    else
+		request.Position->PanTilt = new tt__Vector2D();
+		request.Position->PanTilt->x = 0;
+		request.Position->PanTilt->y = 0;
+#    endif
+#    ifdef SPEED
+		request.Speed = new tt__PTZSpeed();
+		request.Speed->PanTilt = new tt__Vector2D();
+		request.Speed->Zoom = new tt__Vector1D();
+		request.Speed->PanTilt->x = 100;
+		request.Speed->PanTilt->y = 100;
+		request.Speed->Zoom->x = 0;
+#     endif // SPEED
+		auto response = onvifDevice.AbsoluteMove(request);
+#  else // RELATIVE
+		Request<_tptz__RelativeMove> request;
+		request.Translation = new tt__PTZVector();
+#    ifdef ZOOM
+		request.Translation->Zoom = new tt__Vector1D();
+		request.Translation->Zoom->x = 0.5;
+#    else
+		request.Translation->PanTilt = new tt__Vector2D();
+		request.Translation->PanTilt->x = -0.1;
+		request.Translation->PanTilt->y = -0.1;
+#    endif
+#    ifdef SPEED
+		request.Speed = new tt__PTZSpeed();
+		request.Speed->PanTilt = new tt__Vector2D();
+		request.Speed->Zoom = new tt__Vector1D();
+		request.Speed->PanTilt->x = 100;
+		request.Speed->PanTilt->y = 100;
+		request.Speed->Zoom->x = 0;
+#     endif // SPEED
+		auto response = onvifDevice.RelativeMove(request);
+#  endif // ABSOLUTE
+#endif // CONTINUOUS
+		if(response) {
+			qDebug() << "Moved right";
+		} else {
+			qDebug() << "Didn't move right";
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+	}
 	// 	Request<_tev__GetEventProperties> req;
 	// 	auto res = onvifEvent->GetEventProperties(req);
 	// 	if(auto resObj = res.getResultObject()) {
@@ -152,16 +276,17 @@ int main(int argc, char **argv) {
 	// 	}
 	/*
 	 if(onvifEvent) {
-	  Request<_tev__CreatePullPointSubscription> request;
-	  request.InitialTerminationTime = new AbsoluteOrRelativeTime(60000);
-	  auto response = onvifEvent->CreatePullPointSubscription(request);
-	  if(response && response.GetResultObject()) {
-	   response.GetResultObject()->Start();
-	   for(auto i = 0; i < 60; i++) {
-	    QThread::currentThread()->msleep(10000);
-	   }
-	  }
-	 }
-	 */
+		Request<_tev__CreatePullPointSubscription> request;
+		request.InitialTerminationTime = new AbsoluteOrRelativeTime(60000);
+		auto response = onvifEvent->CreatePullPointSubscription(request);
+		if(response && response.GetResultObject()) {
+			response.GetResultObject()->SubscriptionReference;
+			for(auto i = 0; i < 60; i++) {
+				QThread::currentThread()->msleep(10000);
+			}
+		}
+	} else {
+		qDebug() << "No event :/";
+	}*/
 	return 0;
 }
